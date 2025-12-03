@@ -51,3 +51,6 @@ htmlcov/
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
+
+# ignore csv
+recipes_extended.csv
