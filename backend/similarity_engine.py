@@ -118,6 +118,21 @@ def get_recipe_row(recipe_index: int) -> pd.Series:
     return recipes.loc[recipe_index]
 
 
+def find_recipe_index_by_title(title_query: str) -> int | None:
+    """
+    Try to find a recipe index by (case-insensitive) title substring match.
+    Returns the first match or None.
+    """
+    if not title_query:
+        return None
+    recipes, _, _, _, _ = load_similarity_assets()
+    mask = recipes["recipe_title"].fillna("").str.contains(title_query, case=False, na=False)
+    matches = recipes[mask]
+    if matches.empty:
+        return None
+    return int(matches.index[0])
+
+
 def get_top_similar_recipes(recipe_index: int, top_n: int = 10) -> pd.DataFrame:
     """
     Given a recipe index, return the top N most similar recipes based on the

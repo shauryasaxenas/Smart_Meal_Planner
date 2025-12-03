@@ -19,7 +19,12 @@ import pandas as pd
 
 from .filters import filter_recipes_by_constraints, normalize_constraints, parse_user_goals
 from .llm import get_response, load_llm
-from .similarity_engine import get_recipe_row, get_top_similar_recipes, load_similarity_assets
+from .similarity_engine import (
+    find_recipe_index_by_title,
+    get_recipe_row,
+    get_top_similar_recipes,
+    load_similarity_assets,
+)
 
 
 def pick_anchor_recipe_index(candidate_idx: pd.Index) -> int | None:
@@ -163,6 +168,82 @@ def _serialize_recipe_row(row: pd.Series, similarity_score: float | None = None)
         "similarity_score": float(similarity_score) if similarity_score is not None else None,
         "description": row.get("description"),
         "ingredients": row.get("ingredients"),
+        "directions": row.get("directions"),
+    }
+
+
+def _parse_list_like(value: Any, *, split_sentences: bool = False) -> list[str]:
+    """
+    Try to parse list-like strings; otherwise, wrap non-empty strings in a list.
+    Optionally split a single long string into sentences for directions.
+    """
+    if isinstance(value, list):
+        items = [str(v) for v in value]
+        if split_sentences:
+            split_items: list[str] = []
+            for item in items:
+                parts = _split_sentences(item)
+                split_items.extend(parts if len(parts) > 1 else [item.strip()])
+            # Remove empties while preserving order.
+            return [s for s in split_items if s]
+        return items
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            parsed = None
+            try:
+                parsed = json.loads(stripped)
+            except Exception:  # noqa: BLE001
+                try:
+                    import ast  # local import to avoid global if not needed
+
+                    parsed = ast.literal_eval(stripped)
+                except Exception:  # noqa: BLE001
+                    parsed = None
+            if isinstance(parsed, list):
+                items = [str(v) for v in parsed]
+                if split_sentences:
+                    split_items: list[str] = []
+                    for item in items:
+                        parts = _split_sentences(item)
+                        split_items.extend(parts if len(parts) > 1 else [item.strip()])
+                    return [s for s in split_items if s]
+                return items
+        if stripped:
+            if split_sentences:
+                sentences = _split_sentences(stripped)
+                if len(sentences) > 1:
+                    return sentences
+            return [stripped]
+    return []
+
+
+def _split_sentences(text: str) -> list[str]:
+    import re
+
+    # Split on sentence-ending punctuation or newlines/semicolons to handle single-string directions.
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", text) if s.strip()]
+    return sentences
+
+
+def recipe_details_by_title(title_query: str) -> dict | None:
+    """
+    Fetch a recipe by title substring and return ingredients/directions plus metadata.
+    """
+    idx = find_recipe_index_by_title(title_query)
+    if idx is None:
+        return None
+    row = get_recipe_row(idx)
+    total_time = float((row.get("est_prep_time_min", 0) or 0) + (row.get("est_cook_time_min", 0) or 0))
+    return {
+        "id": int(idx),
+        "title": row.get("recipe_title"),
+        "description": row.get("description"),
+        "cook_speed": row.get("cook_speed"),
+        "difficulty": row.get("difficulty"),
+        "total_time_min": total_time,
+        "ingredients_list": _parse_list_like(row.get("ingredients_raw") or row.get("ingredients")),
+        "directions_list": _parse_list_like(row.get("directions_raw") or row.get("directions"), split_sentences=True),
     }
 
 

@@ -13,6 +13,18 @@ export default function App() {
     return value.replace(/\*\*(.*?)\*\*/g, "$1");
   };
 
+  const isRecipeDetailQuery = (textValue) => {
+    if (!textValue) return false;
+    const lowered = textValue.toLowerCase();
+    return (
+      lowered.startsWith("how do i make") ||
+      lowered.startsWith("how to make") ||
+      lowered.startsWith("recipe for") ||
+      lowered.includes("ingredients for") ||
+      lowered.includes("directions for")
+    );
+  };
+
   // Scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -28,10 +40,14 @@ export default function App() {
     setLoading(true);
 
     try {
-      const response = await fetch("http://localhost:8000/submit", {
+      const detailMode = isRecipeDetailQuery(text);
+      const endpoint = detailMode ? "http://localhost:8000/recipe_details" : "http://localhost:8000/submit";
+      const payload = detailMode ? { recipe_query: text.replace(/^(how do i make|how to make|recipe for)/i, "").trim() || text } : { user_message: text, top_n: 5 };
+
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_message: text, top_n: 5 }),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
@@ -42,19 +58,29 @@ export default function App() {
 
       const data = await response.json();
 
-      const recipeList = (data.similar_recipes || [])
-        .map(
-          (r, idx) =>
-            `${idx + 1}. ${r.title || "Unknown"} (${r.cook_speed || "n/a"}, ~${r.total_time_min || "?"} min)`
-        )
-        .join("\n");
+      let botMessage;
+      if (data.ingredients_list || data.directions_list) {
+        const ingredients = (data.ingredients_list || []).map((it) => `- ${it}`).join("\n");
+        const directions = (data.directions_list || []).map((it, i) => `${i + 1}. ${it}`).join("\n");
+        botMessage = {
+          role: "bot",
+          content: `${data.title || "Recipe"}\n${data.description || ""}\n\nIngredients:\n${ingredients}\n\nDirections:\n${directions}`,
+        };
+      } else {
+        const recipeList = (data.similar_recipes || [])
+          .map(
+            (r, idx) =>
+              `${idx + 1}. ${r.title || "Unknown"} (${r.cook_speed || "n/a"}, ~${r.total_time_min || "?"} min)`
+          )
+          .join("\n");
 
-      const botMessage = {
-        role: "bot",
-        content:
-          (data.explanation || "No explanation returned.") +
-          (recipeList ? `\n\nTop picks:\n${recipeList}` : ""),
-      };
+        botMessage = {
+          role: "bot",
+          content:
+            (data.explanation || "No explanation returned.") +
+            (recipeList ? `\n\nTop picks:\n${recipeList}` : ""),
+        };
+      }
       setMessages((prev) => [...prev, botMessage]);
     } catch (err) {
       setMessages((prev) => [

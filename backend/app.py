@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from .pipeline import recommend_from_text, warm_up
+from .pipeline import recommend_from_text, recipe_details_by_title, warm_up
 
 
 class SubmitRequest(BaseModel):
@@ -50,6 +50,21 @@ class SubmitResponse(BaseModel):
     explanation: str
 
 
+class RecipeDetailRequest(BaseModel):
+    recipe_query: str = Field(..., min_length=1, description="Title or partial title to look up.")
+
+
+class RecipeDetailResponse(BaseModel):
+    id: int
+    title: Optional[str] = None
+    description: Optional[str] = None
+    cook_speed: Optional[str] = None
+    difficulty: Optional[str] = None
+    total_time_min: Optional[float] = None
+    ingredients_list: List[str] = []
+    directions_list: List[str] = []
+
+
 app = FastAPI(title="Smart Meal Planner API", version="0.1.0")
 
 # Allow the React frontend to call us locally.
@@ -77,6 +92,14 @@ def submit(request: SubmitRequest) -> SubmitResponse:
         raise HTTPException(status_code=500, detail=f"Failed to generate recommendation: {exc}") from exc
 
     return SubmitResponse(**result)
+
+
+@app.post("/recipe_details", response_model=RecipeDetailResponse)
+def recipe_details(request: RecipeDetailRequest) -> RecipeDetailResponse:
+    detail = recipe_details_by_title(request.recipe_query)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Recipe not found.")
+    return RecipeDetailResponse(**detail)
 
 
 if __name__ == "__main__":
