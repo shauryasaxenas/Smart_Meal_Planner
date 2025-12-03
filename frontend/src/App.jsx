@@ -7,6 +7,12 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef(null);
 
+  const formatContent = (value) => {
+    if (!value) return "";
+    // Strip simple markdown bold markers for cleaner display.
+    return value.replace(/\*\*(.*?)\*\*/g, "$1");
+  };
+
   // Scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -25,11 +31,30 @@ export default function App() {
       const response = await fetch("http://localhost:8000/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ user_message: text, top_n: 5 }),
       });
 
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const detail = errorData.detail || response.statusText || "Unknown error";
+        throw new Error(detail);
+      }
+
       const data = await response.json();
-      const botMessage = { role: "bot", content: data.received || "No response" };
+
+      const recipeList = (data.similar_recipes || [])
+        .map(
+          (r, idx) =>
+            `${idx + 1}. ${r.title || "Unknown"} (${r.cook_speed || "n/a"}, ~${r.total_time_min || "?"} min)`
+        )
+        .join("\n");
+
+      const botMessage = {
+        role: "bot",
+        content:
+          (data.explanation || "No explanation returned.") +
+          (recipeList ? `\n\nTop picks:\n${recipeList}` : ""),
+      };
       setMessages((prev) => [...prev, botMessage]);
     } catch (err) {
       setMessages((prev) => [
@@ -76,9 +101,10 @@ export default function App() {
                 maxWidth: "70%",
                 background: m.role === "user" ? "#007bff" : "#e5e5ea",
                 color: m.role === "user" ? "#fff" : "#000",
+                whiteSpace: "pre-wrap",
               }}
             >
-              {m.content}
+              {formatContent(m.content)}
             </div>
           </div>
         ))}

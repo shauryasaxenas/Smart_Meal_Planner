@@ -1,12 +1,15 @@
 """
 Similarity engine: TF-IDF + numeric features for recipe matching.
 
-This module loads the recipe dataset once, builds combined feature vectors,
-and exposes a cosine-similarity helper that mirrors the notebook logic.
+Updated to mirror the latest notebook logic:
+- Parse list-like columns into text (dietary_profile, cuisine_list, tastes, health_flags)
+- Include engineered total_time feature
+- Combine richer text fields (combined_text + parsed lists + cook_speed + difficulty)
 """
 
 from __future__ import annotations
 
+import ast
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -44,52 +47,70 @@ def _locate_dataset() -> Path:
     )
 
 
+def _parse_list_like_to_text(x: object) -> str:
+    """
+    Convert stringified lists such as '["sweet","spicy"]' into 'sweet spicy'.
+    Falls back to the raw string if parsing fails.
+    """
+    if isinstance(x, str):
+        stripped = x.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            try:
+                parsed = ast.literal_eval(stripped)
+                if isinstance(parsed, list):
+                    return " ".join(str(item) for item in parsed)
+            except Exception:  # noqa: BLE001
+                return x
+        return stripped
+    return ""
+
+
 @lru_cache(maxsize=1)
 def load_similarity_assets() -> Tuple[pd.DataFrame, pd.DataFrame, csr_matrix, TfidfVectorizer, StandardScaler]:
     """
-    Load the dataset and build the combined TF-IDF + numeric feature matrix.
-    Returned objects are cached so we only do this heavy work once.
+    Load the dataset and build the combined TF-IDF + numeric feature matrix,
+    with richer text features and engineered total_time.
+    Returned objects are cached so we only do this heavy work once per process.
     """
     data_path = _locate_dataset()
     recipes = pd.read_csv(data_path)
 
-    selected_columns = [
-        "recipe_title",
-        "category",
-        "subcategory",
-        "description",
-        "ingredients",
-        "num_ingredients",
-        "cook_speed",
-        "est_cook_time_min",
-        "healthiness_score",
-    ]
+    feature_df = recipes.copy()
+    feature_df["total_time"] = feature_df["est_prep_time_min"].fillna(0) + feature_df["est_cook_time_min"].fillna(0)
 
-    reduced_df = recipes[selected_columns].copy()
-    reduced_df["content"] = (
-        reduced_df["recipe_title"].fillna("")
+    # Parse list-like columns into space-separated tokens for TF-IDF.
+    feature_df["dietary_profile_text"] = feature_df.get("dietary_profile", "").apply(_parse_list_like_to_text)
+    feature_df["cuisine_list_text"] = feature_df.get("cuisine_list", "").apply(_parse_list_like_to_text)
+    feature_df["tastes_text"] = feature_df.get("tastes", "").apply(_parse_list_like_to_text)
+    feature_df["health_flags_text"] = feature_df.get("health_flags", "").apply(_parse_list_like_to_text)
+
+    # Combined textual signal (aligned with the provided notebook code).
+    feature_df["content"] = (
+        feature_df.get("combined_text", "").fillna("")
         + " "
-        + reduced_df["category"].fillna("")
+        + feature_df["dietary_profile_text"].fillna("")
         + " "
-        + reduced_df["subcategory"].fillna("")
+        + feature_df["cuisine_list_text"].fillna("")
         + " "
-        + reduced_df["description"].fillna("")
+        + feature_df["tastes_text"].fillna("")
         + " "
-        + reduced_df["ingredients"].fillna("")
+        + feature_df["health_flags_text"].fillna("")
         + " "
-        + reduced_df["cook_speed"].fillna("")
+        + feature_df.get("cook_speed", "").fillna("")
+        + " "
+        + feature_df.get("difficulty", "").fillna("")
     )
 
     vectorizer = TfidfVectorizer(stop_words="english", max_features=5000)
-    tfidf_matrix = vectorizer.fit_transform(reduced_df["content"])
+    tfidf_matrix = vectorizer.fit_transform(feature_df["content"])
 
-    numeric_features = reduced_df[["num_ingredients", "est_cook_time_min", "healthiness_score"]].fillna(0)
+    numeric_features = feature_df[["num_ingredients", "total_time", "healthiness_score"]].fillna(0)
     scaler = StandardScaler()
     numeric_scaled = scaler.fit_transform(numeric_features)
 
     combined_features = hstack([tfidf_matrix, csr_matrix(numeric_scaled * NUMERIC_WEIGHT)])
 
-    return recipes, reduced_df, combined_features, vectorizer, scaler
+    return recipes, feature_df, combined_features, vectorizer, scaler
 
 
 def get_recipe_row(recipe_index: int) -> pd.Series:
@@ -106,7 +127,7 @@ def get_top_similar_recipes(recipe_index: int, top_n: int = 10) -> pd.DataFrame:
     if recipe_index is None:
         return pd.DataFrame()
 
-    recipes, reduced_df, combined_features, _, _ = load_similarity_assets()
+    recipes, feature_df, combined_features, _, _ = load_similarity_assets()
 
     if recipe_index < 0 or recipe_index >= combined_features.shape[0]:
         raise IndexError(f"Recipe index {recipe_index} out of bounds for {combined_features.shape[0]} rows.")
@@ -114,7 +135,7 @@ def get_top_similar_recipes(recipe_index: int, top_n: int = 10) -> pd.DataFrame:
     sim_scores = cosine_similarity(combined_features[recipe_index], combined_features).flatten()
     sim_df = pd.DataFrame(
         {
-            "recipe_title": reduced_df["recipe_title"],
+            "recipe_title": feature_df["recipe_title"],
             "similarity_score": sim_scores,
         }
     )

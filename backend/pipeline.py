@@ -85,15 +85,65 @@ Base recipe we anchored on:
 Top similar recipes that also match the constraints:
 {sim_summaries}
 
-Explain in a short paragraph:
-- Why these recipes fit the user's goals (time, diet, healthiness, taste, etc.).
-- How they differ from each other (e.g., fastest vs healthiest vs simplest).
-- End with a brief bullet list recommending 2–3 to try first.
-Keep it concise and user-friendly.
+Format your answer exactly as:
+
+1) One short paragraph (2–3 sentences) explaining why these recipes fit the goals and how they differ (fastest, healthiest, simplest, spiciest, etc.).
+2) A numbered list of the top {min(5, len(similar_df))} picks. Each line: \"Title — cook_speed, ~TOTAL_TIME min, key trait\".
+3) One closing sentence recommending 1–2 to try first.
+
+Be concise and easy to read; no extra sections or repetition beyond this format.
 """
 
     _, answer = get_response(prompt, enable_thinking=False, max_new_tokens=600, temperature=0.3)
     return answer
+
+
+def _critique_explanation(
+    explanation: str, constraints: dict, anchor_index: int, similar_df: pd.DataFrame, max_new_tokens: int = 320
+) -> str:
+    """
+    Lightweight self-review pass to catch obvious contradictions (timing, diet flags, etc.).
+    We supply the model with the structured inputs + its prior answer and ask for a corrected version.
+    """
+    recipes, _, _, _, _ = load_similarity_assets()
+
+    def _row_summary(idx: int) -> str:
+        row = recipes.loc[idx]
+        total_time = (row.get("est_prep_time_min", 0) or 0) + (row.get("est_cook_time_min", 0) or 0)
+        diet_flags = []
+        for flag in ["is_vegan", "is_vegetarian", "is_halal", "is_kosher", "is_nut_free", "is_dairy_free", "is_gluten_free"]:
+            if bool(row.get(flag)):
+                diet_flags.append(flag.replace("is_", ""))
+        diet = ", ".join(diet_flags) if diet_flags else "none"
+        return (
+            f"{row.get('recipe_title', '(unknown)')} — speed={row.get('cook_speed')}, "
+            f"total_time={total_time}, diet_flags={diet}, tastes={row.get('tastes')}, "
+            f"health={row.get('healthiness_score')}"
+        )
+
+    sim_summaries = "\n".join(f"- {_row_summary(idx)}" for idx in similar_df.index)
+    anchor_summary = _row_summary(anchor_index) if anchor_index is not None else "(none)"
+
+    prompt = f"""
+You are a fast proofreader. Check the assistant's prior explanation for logical errors or constraint misses.
+
+User constraints (may be partial):
+{json.dumps(constraints, indent=2)}
+
+Anchor recipe:
+- {anchor_summary}
+
+Similar recipes:
+{sim_summaries}
+
+Prior explanation:
+\"\"\"{explanation}\"\"\"
+
+Fix any contradictions (e.g., calling a 28 min recipe the fastest when a 21 min exists, or suggesting non-vegetarian when vegetarian is requested). If the prior answer is already consistent, keep it but trim fluff. Output only the corrected explanation in the same format as the prior answer (paragraph + numbered list + closing sentence).
+"""
+
+    _, revised = get_response(prompt, enable_thinking=False, max_new_tokens=max_new_tokens, temperature=0.1)
+    return revised.strip() or explanation
 
 
 def _serialize_recipe_row(row: pd.Series, similarity_score: float | None = None) -> dict:
@@ -180,7 +230,10 @@ def recommend_from_text(user_text: str, top_n: int = 5) -> dict:
         for idx in similar_df.index
     ]
 
-    result["explanation"] = explain_recommendations(user_text, constraints, anchor_idx, similar_df)
+    explanation = explain_recommendations(user_text, constraints, anchor_idx, similar_df)
+    # Lightweight self-review to catch contradictions or constraint misses.
+    explanation = _critique_explanation(explanation, constraints, anchor_idx, similar_df)
+    result["explanation"] = explanation
     return result
 
 
