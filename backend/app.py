@@ -22,6 +22,10 @@ from .pipeline import recommend_from_text, recipe_details_by_title, warm_up
 class SubmitRequest(BaseModel):
     user_message: str = Field(..., min_length=1)
     top_n: int = Field(5, ge=1, le=20, description="How many similar recipes to return.")
+    baseline_constraints: Dict[str, Any] | None = Field(
+        None,
+        description="Optional baseline constraints (e.g., dietary flags, cuisines) gathered from the survey.",
+    )
 
 
 class RecipeCard(BaseModel):
@@ -80,13 +84,19 @@ app.add_middleware(
 @app.on_event("startup")
 def _startup() -> None:
     # Warm up heavy assets (model + similarity features) once.
-    warm_up()
+    # Can be skipped by setting SKIP_WARM_UP=1 to avoid auto-loading the LLM at startup.
+    if os.getenv("SKIP_WARM_UP") not in {"1", "true", "yes", "on"}:
+        warm_up()
 
 
 @app.post("/submit", response_model=SubmitResponse)
 def submit(request: SubmitRequest) -> SubmitResponse:
     try:
-        result = recommend_from_text(request.user_message, top_n=request.top_n)
+        result = recommend_from_text(
+            request.user_message,
+            top_n=request.top_n,
+            baseline_constraints=request.baseline_constraints,
+        )
     except Exception as exc:  # noqa: BLE001
         # Surface a clean error to the frontend.
         raise HTTPException(status_code=500, detail=f"Failed to generate recommendation: {exc}") from exc

@@ -145,8 +145,10 @@ def filter_recipes_by_constraints(recipes_df: pd.DataFrame, constraints: Dict[st
     tastes_exc: List[str] = c.get("tastes_exclude") or []
 
     if tastes_inc:
-        for t in tastes_inc:
-            df = df[df["tastes"].fillna("").astype(str).str.contains(t, case=False)]
+        # Match any of the requested tastes (OR).
+        pattern = "|".join(re.escape(t) for t in tastes_inc if t)
+        if pattern:
+            df = df[df["tastes"].fillna("").astype(str).str.contains(pattern, case=False)]
 
     if tastes_exc:
         for t in tastes_exc:
@@ -155,8 +157,16 @@ def filter_recipes_by_constraints(recipes_df: pd.DataFrame, constraints: Dict[st
     # Cuisines
     cuisines_inc: List[str] = c.get("cuisines_include") or []
     if cuisines_inc:
-        for cu in cuisines_inc:
-            df = df[df["cuisine_list"].fillna("").astype(str).str.contains(cu, case=False)]
+        pattern = "|".join(re.escape(cu) for cu in cuisines_inc if cu)
+        if pattern:
+            df = df[df["cuisine_list"].fillna("").astype(str).str.contains(pattern, case=False)]
+
+    # Course preferences (e.g., breakfast, lunch, dinner, snack) — treat as OR.
+    course_inc: List[str] = c.get("course_list") or []
+    if course_inc:
+        pattern = "|".join(re.escape(co) for co in course_inc if co)
+        if pattern:
+            df = df[df["course_list"].fillna("").astype(str).str.contains(pattern, case=False)]
 
     # Healthiness
     if c.get("healthiness_min") is not None:

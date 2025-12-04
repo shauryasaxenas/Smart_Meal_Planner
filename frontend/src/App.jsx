@@ -1,5 +1,5 @@
-// Updated App.jsx with black custom checkboxes
-import { useState, useRef, useEffect } from "react";
+// src/App.jsx
+import { useEffect, useRef, useState } from "react";
 
 export default function App() {
   const [messages, setMessages] = useState([]);
@@ -7,11 +7,13 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [surveyStep, setSurveyStep] = useState(0);
   const [selectedOptions, setSelectedOptions] = useState([]);
+  const [surveyResponses, setSurveyResponses] = useState([]);
+  const [baselineConstraints, setBaselineConstraints] = useState(null);
   const messagesEndRef = useRef(null);
 
   const surveyQuestions = [
     {
-      question: "Welcome! Let's start with an introduction survey. What types of cuisine do you enjoy?",
+      question: "Welcome! Let's start with an introduction survey to understand you dietary preferences.\nWhat types of cuisine do you enjoy?",
       options: ["Italian", "Mexican", "Chinese", "Indian", "Mediterranean", "American", "Other"],
     },
     {
@@ -30,22 +32,124 @@ export default function App() {
 
   const formatContent = (value) => {
     if (!value) return "";
+    // Strip simple markdown bold markers for cleaner display.
     return value.replace(/\*\*(.*?)\*\*/g, "$1");
   };
 
+  const isRecipeDetailQuery = (textValue) => {
+    if (!textValue) return false;
+    const lowered = textValue.toLowerCase();
+    return (
+      lowered.startsWith("how do i make") ||
+      lowered.startsWith("how to make") ||
+      lowered.startsWith("recipe for") ||
+      lowered.includes("ingredients for") ||
+      lowered.includes("directions for")
+    );
+  };
+
+  // Scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Kick off survey prompt
   useEffect(() => {
     if (surveyStep === 0 && messages.length === 0) {
       setMessages([{ role: "bot", content: surveyQuestions[0].question }]);
     }
   }, [surveyStep, messages.length]);
 
+  const computeBaselineConstraints = (responses) => {
+    const constraints = {};
+
+    // Q1 cuisines
+    const cuisines = responses[0] || [];
+    if (cuisines.length) {
+      constraints.cuisines_include = cuisines.map((c) => c.toLowerCase());
+    }
+
+    // Q2 dietary
+    const diet = responses[1] || [];
+    if (diet.includes("Vegan")) constraints.is_vegan = true;
+    if (diet.includes("Vegetarian")) constraints.is_vegetarian = true;
+    if (diet.includes("Gluten-free")) constraints.is_gluten_free = true;
+    if (diet.includes("Nut allergy")) constraints.is_nut_free = true;
+    if (diet.includes("Dairy-free")) constraints.is_dairy_free = true;
+
+    // Q3 prep style -> cook_speed/time
+    const prep = responses[2] || [];
+    const wantsQuick = prep.includes("Quick meals");
+    const wantsSlow = prep.includes("Slow cooking");
+
+    // Only set cook_speed if they gave a clear single intent; avoid over-constraining.
+    if (wantsQuick && !wantsSlow) {
+      constraints.cook_speed = "fast";
+    } else if (wantsSlow && !wantsQuick) {
+      constraints.cook_speed = "slow";
+    }
+
+    // Q4 time-of-day -> course hint
+    const times = responses[3] || [];
+    const courseMap = [];
+    if (times.includes("Breakfast")) courseMap.push("breakfast");
+    if (times.includes("Lunch")) courseMap.push("lunch");
+    if (times.includes("Dinner")) courseMap.push("dinner");
+    if (times.includes("Snack")) courseMap.push("snack");
+    if (courseMap.length) constraints.course_list = courseMap;
+
+    return Object.keys(constraints).length ? constraints : null;
+  };
+
+  const requestRecommendation = async (userText, baseline = null) => {
+    setLoading(true);
+    try {
+      const response = await fetch("http://localhost:8000/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_message: userText,
+          top_n: 5,
+          baseline_constraints: baseline,
+        }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || response.statusText || "Unknown error");
+      }
+
+      const data = await response.json();
+      const recipeList = (data.similar_recipes || [])
+        .map(
+          (r, idx) =>
+            `${idx + 1}. ${r.title || "Unknown"} (${r.cook_speed || "n/a"}, ~${r.total_time_min || "?"} min)`
+        )
+        .join("\n");
+
+      const botMessage = {
+        role: "bot",
+        content:
+          (data.explanation || "No explanation returned.") + (recipeList ? `\n\nTop picks:\n${recipeList}` : ""),
+      };
+      setMessages((prev) => [...prev, botMessage]);
+    } catch (err) {
+      setMessages((prev) => [...prev, { role: "bot", content: "Error: " + err.message }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSurveyFlow = () => {
     const responseText = `Selected: ${selectedOptions.join(", ")}`;
     setMessages((prev) => [...prev, { role: "user", content: responseText }]);
+
+    const nextResponses = (() => {
+      const next = [...surveyResponses];
+      next[surveyStep] = selectedOptions;
+      return next;
+    })();
+    setSurveyResponses(nextResponses);
 
     const next = surveyStep + 1;
     setSurveyStep(next);
@@ -54,10 +158,13 @@ export default function App() {
     if (next < surveyQuestions.length) {
       setMessages((prev) => [...prev, { role: "bot", content: surveyQuestions[next].question }]);
     } else {
+      const computed = computeBaselineConstraints(nextResponses);
+      setBaselineConstraints(computed);
       setMessages((prev) => [
         ...prev,
-        { role: "bot", content: "Thanks! Your survey is complete. You can now ask for recipes or suggestions." },
+        { role: "bot", content: "Thanks! Your survey is complete. Generating starter ideas based on your preferences..." },
       ]);
+      requestRecommendation("starter recommendations based on my survey", computed);
     }
   };
 
@@ -72,50 +179,67 @@ export default function App() {
 
     if (!text.trim()) return;
 
-    const userResponse = text;
-    setMessages((prev) => [...prev, { role: "user", content: userResponse }]);
+    const userMessage = { role: "user", content: text };
+    setMessages((prev) => [...prev, userMessage]);
+    const outgoingText = text;
     setText("");
     setLoading(true);
 
     try {
-      const response = await fetch("http://localhost:8000/submit", {
+      const detailMode = isRecipeDetailQuery(outgoingText);
+      const endpoint = detailMode ? "http://localhost:8000/recipe_details" : "http://localhost:8000/submit";
+      const payload = detailMode
+        ? { recipe_query: outgoingText.replace(/^(how do i make|how to make|recipe for)/i, "").trim() || outgoingText }
+        : { user_message: outgoingText, top_n: 5, baseline_constraints: baselineConstraints };
+
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_message: userResponse, top_n: 5 }),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.detail || "Unknown error");
+        const errorData = await response.json().catch(() => ({}));
+        const detail = errorData.detail || response.statusText || "Unknown error";
+        throw new Error(detail);
       }
 
       const data = await response.json();
-      const recipeList = (data.similar_recipes || [])
-        .map(
-          (r, idx) =>
-            `${idx + 1}. ${r.title || "Unknown"} (${r.cook_speed || "n/a"}, ~${r.total_time_min || "?"} min)`
-        )
-        .join("\n");
 
-      setMessages((prev) => [
-        ...prev,
-        {
+      let botMessage;
+      if (data.ingredients_list || data.directions_list) {
+        const ingredients = (data.ingredients_list || []).map((it) => `- ${it}`).join("\n");
+        const directions = (data.directions_list || []).map((it, i) => `${i + 1}. ${it}`).join("\n");
+        botMessage = {
+          role: "bot",
+          content: `${data.title || "Recipe"}\n${data.description || ""}\n\nIngredients:\n${ingredients}\n\nDirections:\n${directions}`,
+        };
+      } else {
+        const recipeList = (data.similar_recipes || [])
+          .map(
+            (r, idx) =>
+              `${idx + 1}. ${r.title || "Unknown"} (${r.cook_speed || "n/a"}, ~${r.total_time_min || "?"} min)`
+          )
+          .join("\n");
+
+        botMessage = {
           role: "bot",
           content:
             (data.explanation || "No explanation returned.") +
             (recipeList ? `\n\nTop picks:\n${recipeList}` : ""),
-        },
-      ]);
+        };
+      }
+      setMessages((prev) => [...prev, botMessage]);
     } catch (err) {
-      setMessages((prev) => [...prev, { role: "bot", content: "Error: " + err.message }]);
+      setMessages((prev) => [
+        ...prev,
+        { role: "bot", content: "Error: " + err.message },
+      ]);
     } finally {
       setLoading(false);
     }
   };
 
-  // -------------------
-  // RENDER CUSTOM CHECKBOXES (black)
-  // -------------------
   const renderSurveyOptions = () => {
     if (surveyStep >= surveyQuestions.length) return null;
 
@@ -134,7 +258,6 @@ export default function App() {
               userSelect: "none",
             }}
           >
-            {/* Hidden input */}
             <input
               type="checkbox"
               value={opt}
@@ -150,7 +273,6 @@ export default function App() {
               style={{ display: "none" }}
             />
 
-            {/* Custom black checkbox */}
             <span
               style={{
                 width: 18,
@@ -173,9 +295,6 @@ export default function App() {
     );
   };
 
-  // -------------------
-  // MAIN UI
-  // -------------------
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#f5f5f5" }}>
       <div style={{ flex: 1, padding: 16, overflowY: "auto" }}>
@@ -225,9 +344,7 @@ export default function App() {
           type="text"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder={
-            surveyStep < surveyQuestions.length ? "Select from above" : "Type your message..."
-          }
+          placeholder={surveyStep < surveyQuestions.length ? "Select from above" : "Type your message..."}
           disabled={surveyStep < surveyQuestions.length || loading}
           style={{
             flex: 1,

@@ -247,7 +247,19 @@ def recipe_details_by_title(title_query: str) -> dict | None:
     }
 
 
-def recommend_from_text(user_text: str, top_n: int = 5) -> dict:
+def _merge_constraints(base: dict | None, override: dict | None) -> dict:
+    """
+    Merge baseline (e.g., survey) constraints with LLM-parsed constraints.
+    Override wins when set; baseline fills gaps.
+    """
+    merged = dict(base or {})
+    for k, v in (override or {}).items():
+        if v is not None:
+            merged[k] = v
+    return merged
+
+
+def recommend_from_text(user_text: str, top_n: int = 5, *, baseline_constraints: dict | None = None) -> dict:
     """
     Full pipeline:
     - LLM parses user_text -> constraints
@@ -261,7 +273,7 @@ def recommend_from_text(user_text: str, top_n: int = 5) -> dict:
     recipes, _, _, _, _ = load_similarity_assets()
 
     constraints_raw = parse_user_goals(user_text)
-    constraints = normalize_constraints(constraints_raw)
+    constraints = normalize_constraints(_merge_constraints(baseline_constraints, constraints_raw))
 
     candidate_idx = filter_recipes_by_constraints(recipes, constraints)
 
