@@ -1,7 +1,9 @@
 // src/App.jsx
 import { useEffect, useRef, useState } from "react";
+import "./App.css";
 
 export default function App() {
+  const [hasStarted, setHasStarted] = useState(false);
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
@@ -50,15 +52,17 @@ export default function App() {
 
   // Scroll to bottom when messages change
   useEffect(() => {
+    if (!hasStarted) return;
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [hasStarted, messages]);
 
   // Kick off survey prompt
   useEffect(() => {
+    if (!hasStarted) return;
     if (surveyStep === 0 && messages.length === 0) {
       setMessages([{ role: "bot", content: surveyQuestions[0].question }]);
     }
-  }, [surveyStep, messages.length]);
+  }, [hasStarted, surveyStep, messages.length]);
 
   const computeBaselineConstraints = (responses) => {
     const constraints = {};
@@ -127,10 +131,12 @@ export default function App() {
         )
         .join("\n");
 
+      const explanation = data.explanation || "No explanation returned.";
+      const listAppend = !data.explanation && recipeList ? `\n\nTop picks:\n${recipeList}` : "";
+
       const botMessage = {
         role: "bot",
-        content:
-          (data.explanation || "No explanation returned.") + (recipeList ? `\n\nTop picks:\n${recipeList}` : ""),
+        content: explanation + listAppend,
       };
       setMessages((prev) => [...prev, botMessage]);
     } catch (err) {
@@ -166,6 +172,15 @@ export default function App() {
       ]);
       requestRecommendation("starter recommendations based on my survey", computed);
     }
+  };
+
+  const handleSkipSurvey = () => {
+    // Bypass survey and allow freeform chat without baseline constraints.
+    setSurveyStep(surveyQuestions.length);
+    setSurveyResponses([]);
+    setSelectedOptions([]);
+    setBaselineConstraints(null);
+    setMessages([{ role: "bot", content: "Survey skipped. Ask anything to get started." }]);
   };
 
   const handleSubmit = async (e) => {
@@ -222,11 +237,12 @@ export default function App() {
           )
           .join("\n");
 
+        const explanation = data.explanation || "No explanation returned.";
+        const listAppend = !data.explanation && recipeList ? `\n\nTop picks:\n${recipeList}` : "";
+
         botMessage = {
           role: "bot",
-          content:
-            (data.explanation || "No explanation returned.") +
-            (recipeList ? `\n\nTop picks:\n${recipeList}` : ""),
+          content: explanation + listAppend,
         };
       }
       setMessages((prev) => [...prev, botMessage]);
@@ -247,6 +263,24 @@ export default function App() {
 
     return (
       <div style={{ marginTop: 8, background: "#fff", padding: 12, borderRadius: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <strong style={{ color: "#000" }}>Intro Survey</strong>
+          <button
+            type="button"
+            onClick={handleSkipSurvey}
+            disabled={loading}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "#007bff",
+              cursor: "pointer",
+              textDecoration: "underline",
+              padding: 0,
+            }}
+          >
+            Skip survey
+          </button>
+        </div>
         {current.options.map((opt) => (
           <label
             key={opt}
@@ -294,6 +328,31 @@ export default function App() {
       </div>
     );
   };
+
+  if (!hasStarted) {
+    return (
+      <div className="landing">
+        <div className="landing-card">
+          <p className="landing-eyebrow">Smart Meal Planner</p>
+          <h1 className="landing-title">Personalized dinner ideas, fast.</h1>
+          <p className="landing-subtitle">
+            Tell us what you are craving, and we will suggest personalized recipes to meet your needs!
+          </p>
+          <div className="landing-steps">
+            <p className="landing-steps-title">How to use it</p>
+            <ol>
+              <li>Tap “Open the chat”</li>
+              <li>Fill out a quick survey to save dietary prefrences, or skip it</li>
+              <li>Ask how to make your favorite suggestion or prompt further!</li>
+            </ol>
+          </div>
+          <button className="landing-button" type="button" onClick={() => setHasStarted(true)}>
+            Open the chat
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#f5f5f5" }}>
