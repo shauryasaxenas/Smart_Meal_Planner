@@ -15,20 +15,59 @@ export default function App() {
 
   const surveyQuestions = [
     {
-      question: "Welcome! Let's start with an introduction survey to understand you dietary preferences.\nWhat types of cuisine do you enjoy?",
-      options: ["Italian", "Mexican", "Chinese", "Indian", "Mediterranean", "American", "Other"],
+      question: "Welcome! Quick survey so we can start with relevant ideas.\nWhich cuisines do you enjoy?",
+      options: [
+        { label: "European", value: "european" },
+        { label: "French", value: "french" },
+        { label: "Asian", value: "asian" },
+        { label: "Mediterranean", value: "mediterranean" },
+        { label: "American (region)", value: "american_region" },
+        { label: "American (general)", value: "american" },
+        { label: "Italian", value: "italian" },
+        { label: "Korean", value: "korean" },
+        { label: "Greek", value: "greek" },
+        { label: "Chinese", value: "chinese" },
+        { label: "Thai", value: "thai" },
+        { label: "Caribbean", value: "caribbean" },
+        { label: "Middle Eastern", value: "middle eastern region" },
+        { label: "No preference", value: "__none__" },
+      ],
     },
     {
-      question: "Do you have any dietary restrictions?",
-      options: ["Vegan", "Vegetarian", "Gluten-free", "Nut allergy", "Dairy-free", "None"],
+      question: "Do you have any dietary needs?",
+      options: [
+        { label: "Vegan", value: "is_vegan" },
+        { label: "Vegetarian", value: "is_vegetarian" },
+        { label: "Gluten-free", value: "is_gluten_free" },
+        { label: "Nut-free", value: "is_nut_free" },
+        { label: "Dairy-free", value: "is_dairy_free" },
+        { label: "Halal", value: "is_halal" },
+        { label: "Kosher", value: "is_kosher" },
+        { label: "None", value: "__none__" },
+      ],
     },
     {
-      question: "What prep/cook style do you prefer?",
-      options: ["Quick meals", "Slow cooking", "Minimal dishes", "Meal prep", "No preference"],
+      question: "How much time/effort are you looking for?",
+      options: [
+        { label: "Fast (most under ~45 min)", value: "fast" },
+        { label: "Medium", value: "medium" },
+        { label: "Slow (long simmer/bake)", value: "slow" },
+        { label: "No preference", value: "__none__" },
+      ],
     },
     {
-      question: "What time of day is this meal for?",
-      options: ["Breakfast", "Lunch", "Dinner", "Snack"],
+      question: "What kind of dish?",
+      options: [
+        { label: "Main", value: "main" },
+        { label: "Side", value: "side" },
+        { label: "Breakfast", value: "breakfast" },
+        { label: "Snack", value: "snack" },
+        { label: "Dessert", value: "dessert" },
+        { label: "Soup", value: "soup" },
+        { label: "Drink", value: "drink" },
+        { label: "Bread", value: "bread" },
+        { label: "No preference", value: "__none__" },
+      ],
     },
   ];
 
@@ -66,41 +105,40 @@ export default function App() {
 
   const computeBaselineConstraints = (responses) => {
     const constraints = {};
+    const stripNone = (arr) => (arr || []).filter((v) => v !== "__none__");
 
     // Q1 cuisines
-    const cuisines = responses[0] || [];
+    const cuisines = stripNone(responses[0]);
     if (cuisines.length) {
       constraints.cuisines_include = cuisines.map((c) => c.toLowerCase());
     }
 
     // Q2 dietary
-    const diet = responses[1] || [];
-    if (diet.includes("Vegan")) constraints.is_vegan = true;
-    if (diet.includes("Vegetarian")) constraints.is_vegetarian = true;
-    if (diet.includes("Gluten-free")) constraints.is_gluten_free = true;
-    if (diet.includes("Nut allergy")) constraints.is_nut_free = true;
-    if (diet.includes("Dairy-free")) constraints.is_dairy_free = true;
+    const diet = stripNone(responses[1]);
+    if (diet.includes("is_vegan")) constraints.is_vegan = true;
+    if (diet.includes("is_vegetarian")) constraints.is_vegetarian = true;
+    if (diet.includes("is_gluten_free")) constraints.is_gluten_free = true;
+    if (diet.includes("is_nut_free")) constraints.is_nut_free = true;
+    if (diet.includes("is_dairy_free")) constraints.is_dairy_free = true;
+    if (diet.includes("is_halal")) constraints.is_halal = true;
+    if (diet.includes("is_kosher")) constraints.is_kosher = true;
 
     // Q3 prep style -> cook_speed/time
-    const prep = responses[2] || [];
-    const wantsQuick = prep.includes("Quick meals");
-    const wantsSlow = prep.includes("Slow cooking");
+    const prep = stripNone(responses[2]);
+    const wantsFast = prep.includes("fast");
+    const wantsMedium = prep.includes("medium");
+    const wantsSlow = prep.includes("slow");
 
     // Only set cook_speed if they gave a clear single intent; avoid over-constraining.
-    if (wantsQuick && !wantsSlow) {
-      constraints.cook_speed = "fast";
-    } else if (wantsSlow && !wantsQuick) {
-      constraints.cook_speed = "slow";
+    if (wantsFast + wantsMedium + wantsSlow === 1) {
+      if (wantsFast) constraints.cook_speed = "fast";
+      if (wantsMedium) constraints.cook_speed = "medium";
+      if (wantsSlow) constraints.cook_speed = "slow";
     }
 
     // Q4 time-of-day -> course hint
-    const times = responses[3] || [];
-    const courseMap = [];
-    if (times.includes("Breakfast")) courseMap.push("breakfast");
-    if (times.includes("Lunch")) courseMap.push("lunch");
-    if (times.includes("Dinner")) courseMap.push("dinner");
-    if (times.includes("Snack")) courseMap.push("snack");
-    if (courseMap.length) constraints.course_list = courseMap;
+    const times = stripNone(responses[3]);
+    if (times.length) constraints.course_list = times;
 
     return Object.keys(constraints).length ? constraints : null;
   };
@@ -147,7 +185,11 @@ export default function App() {
   };
 
   const handleSurveyFlow = () => {
-    const responseText = `Selected: ${selectedOptions.join(", ")}`;
+    const current = surveyQuestions[surveyStep];
+    const labelLookup = Object.fromEntries(
+      (current.options || []).map((o) => [o.value ?? o, o.label ?? String(o)])
+    );
+    const responseText = `Selected: ${selectedOptions.map((v) => labelLookup[v] || v).join(", ")}`;
     setMessages((prev) => [...prev, { role: "user", content: responseText }]);
 
     const nextResponses = (() => {
@@ -281,9 +323,13 @@ export default function App() {
             Skip survey
           </button>
         </div>
-        {current.options.map((opt) => (
+        {current.options.map((opt) => {
+          const optVal = opt.value ?? opt;
+          const optLabel = opt.label ?? String(opt);
+          const isChecked = selectedOptions.includes(optVal);
+          return (
           <label
-            key={opt}
+            key={optVal}
             style={{
               display: "flex",
               alignItems: "center",
@@ -294,14 +340,18 @@ export default function App() {
           >
             <input
               type="checkbox"
-              value={opt}
-              checked={selectedOptions.includes(opt)}
+              value={optVal}
+              checked={isChecked}
               onChange={(e) => {
-                if (e.target.checked) {
-                  setSelectedOptions([...selectedOptions, opt]);
-                } else {
-                  setSelectedOptions(selectedOptions.filter((o) => o !== opt));
-                }
+                const { checked } = e.target;
+                setSelectedOptions((prev) => {
+                  if (checked) {
+                    if (optVal === "__none__") return ["__none__"];
+                    const withoutNone = prev.filter((v) => v !== "__none__");
+                    return withoutNone.includes(optVal) ? withoutNone : [...withoutNone, optVal];
+                  }
+                  return prev.filter((v) => v !== optVal);
+                });
               }}
               disabled={loading}
               style={{ display: "none" }}
@@ -309,22 +359,23 @@ export default function App() {
 
             <span
               style={{
-                width: 18,
-                height: 18,
-                borderRadius: 4,
-                border: "2px solid black",
-                marginRight: 10,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                background: selectedOptions.includes(opt) ? "black" : "white",
-                transition: "0.15s",
-              }}
-            />
+              width: 18,
+              height: 18,
+              borderRadius: 4,
+              border: "2px solid black",
+              marginRight: 10,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: isChecked ? "black" : "white",
+              transition: "0.15s",
+            }}
+          />
 
-            <span style={{ color: "#000" }}>{opt}</span>
+            <span style={{ color: "#000" }}>{optLabel}</span>
           </label>
-        ))}
+          );
+        })}
       </div>
     );
   };

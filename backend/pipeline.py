@@ -43,13 +43,28 @@ def pick_anchor_recipe_index(candidate_idx: pd.Index) -> int | None:
 def get_similar_recipes_with_constraints(anchor_index: int, candidate_idx: pd.Index, top_n: int = 5) -> pd.DataFrame:
     """
     Use the similarity engine, then intersect with the constraint-filtered set.
+    If that comes back empty (very tight constraints), fall back to top candidates by healthiness.
     """
     if anchor_index is None:
         return pd.DataFrame()
 
-    raw_sim = get_top_similar_recipes(anchor_index, top_n=50)
+    # Widen the search pool before intersecting with constraints.
+    raw_sim = get_top_similar_recipes(anchor_index, top_n=max(200, top_n * 10))
     filtered = raw_sim[raw_sim.index.isin(candidate_idx)]
-    return filtered.head(top_n)
+    filtered = filtered.head(top_n)
+
+    if not filtered.empty:
+        return filtered
+
+    # Fallback: if similarity intersection is empty, pick the top-N healthiest candidates (excluding anchor if possible).
+    recipes, _, _, _, _ = load_similarity_assets()
+    candidate_pool = recipes.loc[candidate_idx]
+    # Remove anchor from pool if present; add back if nothing else.
+    candidate_pool = candidate_pool[candidate_pool.index != anchor_index]
+    if candidate_pool.empty:
+        candidate_pool = recipes.loc[candidate_idx]
+    fallback = candidate_pool.sort_values(by="healthiness_score", ascending=False).head(top_n)
+    return pd.DataFrame({"similarity_score": [0.0] * len(fallback)}, index=fallback.index)
 
 
 def _summarize_recipe_by_index(idx: int) -> str:
@@ -288,7 +303,11 @@ def recommend_from_text(user_text: str, top_n: int = 5, *, baseline_constraints:
 
     if len(candidate_idx) == 0:
         relaxed = dict(constraints)
+        # Relaxation strategy: drop the strictest filters first.
         relaxed.pop("cook_speed", None)
+        relaxed.pop("course_list", None)
+        # If cuisines are present and we're empty, drop them too.
+        relaxed.pop("cuisines_include", None)
         if "healthiness_min" in relaxed and relaxed["healthiness_min"] is not None:
             relaxed["healthiness_min"] = max(0, relaxed["healthiness_min"] - 10)
 
